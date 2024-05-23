@@ -1,0 +1,126 @@
+#buttonContainer {
+    display: flex;
+    justify-content: center;
+    margin-top: 2%;
+}
+.jsButton, .wasmButton {
+    cursor: pointer;
+}
+.jsButton {
+    border: 2px solid rgba(128, 0, 128, 0.9);
+}
+.jsButton:hover {
+    background-color: rgba(128, 0, 128, 0.9);
+    color: white;
+}
+.wasmButton {
+    border: 2px solid dodgerblue;
+}
+.wasmButton:hover {
+    background-color: dodgerblue;
+    color: white;
+}
+p {
+    font-size: 1em;
+    margin-bottom: 2%;
+    color: black;
+}
+#userImageRunButton, #userEncryptRunButton, #examImageRunButton, #examEncryptRunButton{
+    cursor: pointer;
+    border: 2px solid dodgerblue;
+    margin-top: 1%;
+    padding: 1%;
+}
+#userImageRunButton:hover, #userEncryptRunButton:hover, #examImageRunButton:hover, #examEncryptRunButton:hover {
+    background-color: dodgerblue;
+    color: white;
+}
+html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: auto;
+    font-family: Arial, sans-serif;
+    text-align: center;
+}
+.container {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+header {
+    text-align: center;
+    background-color: #f1f1f1;
+    padding: 5px;
+    border-bottom: 2px solid black;
+}
+h1 {
+    margin: 0;
+    font-size: 26px;
+}
+.contentContainer {
+    flex: 1;
+    display: flex;
+    justify-content: space-around;
+    align-items: flex-start;
+    padding: 20px;
+    padding-top: 0;
+}
+.dottedBox {
+    border: 2px dotted black;
+    padding: 20px;
+    margin: 10px;
+    flex: 1 1 45%;
+    max-width: 600px;
+    box-sizing: border-box;
+    width: 600px;
+}
+h2 {
+    text-align: left;
+    margin-top: 0;
+}
+.fileUploadContainer {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+}
+.fileUploadContainer button {
+    padding: 5px 10px;
+    font-size: 0.8em;
+}
+.buttonInput {
+    padding: 5px 10px;
+    font-size: 0.8em;
+    max-width: 35%;
+    width: 100%;
+    box-sizing: border-box;
+    flex: 1;
+    margin: 0 10px;
+}
+.buttonContainer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    margin-top: 10px;
+}
+.statusMessages {
+    margin-top: 5%;
+    margin-bottom: 0;
+    font-weight: bold;
+}
+footer {
+    font-size: 0.8em;
+    text-align: center;
+    background-color: #f1f1f1;
+    padding: 10px;
+    border-top: 2px solid black;
+}
+@media screen and (max-width: 768px) {
+    .contentContainer {
+        flex-direction: column;
+    }
+    .dottedBox {
+        flex: 1 1 100%;
+        max-width: 100%;
+    }
+}

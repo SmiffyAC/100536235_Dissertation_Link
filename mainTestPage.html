@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>100536235 - Dissertation Project</title>
+    <link rel="stylesheet" type="text/css" href="style.css">
+    <script src="JS_COMB/JS_Transformations.js"></script>
+    <script src="JS_COMB/encryption_JS.js"></script>
+    <script src="WASM_COMB/WASM_COMB.js"></script>
+    <script>
+        window.onload = function() {
+
+            // Create a variable to store the value of the selected resolution category
+            var RadioSelectedRes = "all_res";
+
+            // Initialize the WASM module -----------------------------------------------------------------------------
+            // Initialize WASM only once
+            let wasmInitialized = false;
+            async function initializeWasm() {
+                if (!wasmInitialized) {
+                    await new Promise(resolve => {
+                        if (Module.calledRun) {
+                            console.log("WASM already initialized");
+                            resolve();
+                        } else if (Module.onRuntimeInitialized) {
+                            console.log("WASM initialization callback already set, waiting for initialization to complete.");
+                            resolve();
+                        } else {
+                            console.log("Setting up WASM initialization callback...");
+                            Module['onRuntimeInitialized'] = function() {
+                                console.log("WASM has been initialized");
+                                resolve();
+                            };
+                        }
+                    });
+                    wasmInitialized = true;
+                }
+            }
+
+            // Image Processing Section -------------------------------------------------------------------------------
+
+            var uploadClicked = false; // Flag to check if the upload button has been clicked
+    
+            // Add event listener for file input
+            document.getElementById("imageFileInput").addEventListener("change", function() {
+                var imageFileCount = this.files.length;
+                document.getElementById("imageFileCount").textContent = imageFileCount + " file(s) selected.";
+            });
+    
+            var resolutionData = {};
+            var imageId = 1;  // Initialize imageId here to keep scope in the whole window
+    
+            // Handle the image upload button click - User Tool
+            document.getElementById("imageUploadButton").addEventListener("click", function() {
+                var files = document.getElementById("imageFileInput").files;
+                if (files.length === 0) {
+                    alert("Please ensure files are selected.");
+                    return;
+                }
+                document.getElementById("userImageStatusMsg").textContent = "Files have been uploaded. Ready to run image processing.";
+                uploadClicked = true;
+                resolutionData = {};  // Reset the resolution data
+                imageId = 1;  // Reset image ID counter every time new files are uploaded
+                Array.from(files).forEach(function(file) {
+                    var img = new Image();
+                    img.onload = function() {
+                        resolutionData[imageId] = {
+                            width: this.naturalWidth,
+                            height: this.naturalHeight,
+                            resolutionCategory: getResolutionCategory(this.naturalWidth, this.naturalHeight),
+                            sizeKB: Math.round(file.size / 1024),  // Size in KB
+                            file: file
+                        };
+                        console.log("Resolution data for Image ID " + imageId + ": ", resolutionData[imageId]);
+                        imageId++;  // Increment the ID for the next image
+                    };
+                    img.src = URL.createObjectURL(file);
+                });
+            });
+    
+            function getResolutionCategory(width, height) {
+                var pixels = width * height;
+                if (pixels >= 7680 * 4320) {
+                    return '8K';
+                } else if (pixels >= 3840 * 2160) {
+                    return '4K';
+                } else if (pixels >= 2560 * 1440) {
+                    return '2K';
+                } else if (pixels >= 1920 * 1080) {
+                    return '1080p';
+                } else if (pixels >= 1280 * 720) {
+                    return '720p';
+                } else {
+                    return 'Lower resolution';
+                }
+            }
+    
+            // Handle the image processing button click - User Tool
+            document.getElementById("userImageRunButton").addEventListener("click", async function() {
+                if (!uploadClicked) {
+                    document.getElementById("imageUploadButton").click();
+                    if (Object.keys(resolutionData).length === 0) {
+                        return;
+                    }
+                }
+
+                const numTrials = parseInt(document.getElementById("userImageTrialsInput").value, 10) || 1;
+                let results = [];
+
+                document.getElementById("userImageStatusMsg").textContent = "Running image processing...";
+
+                // Initialize WASM just once
+                await initializeWasm();
+
+                // Check what radio button is selected
+                var selectedFilter = document.querySelector('input[name="filter"]:checked').value;
+
+                // Remove 'User' from the end of the filter name
+                selectedFilter = selectedFilter.replace('User', '');
+                console.log("Selected filter: ", selectedFilter);
+
+                if (selectedFilter === "All Filters") {
+                    var filters = ['applyGaussianBlur', 'applySobelFilter', 'applySepiaTone'];
+                } else {
+                    var filters = [selectedFilter];
+                }
+
+                let totalFiles = Object.keys(resolutionData).length;
+                let totalTrials = totalFiles * numTrials;
+                document.getElementById("userImageStatusMsg").textContent = "Running image processing... Files remaining: " + totalFiles + ", Total trials: " + totalTrials;
+                const categories = ['720p', '1080p', '2K', '4K', '8K'];
+                for (let category of categories) {
+                    let categoryResults = [];
+                    let currentImageId = 1;
+
+                    for (let imageData of Object.values(resolutionData)) {
+                        if (imageData.resolutionCategory === category) {
+                            for (let trialNum = 1; trialNum <= numTrials; trialNum++) {
+                                let jsResult = await processImage(currentImageId, 'JS', imageData.file, trialNum, filters);
+                                categoryResults.push(jsResult);
+                                let wasmResult = await processImage(currentImageId, 'WASM', imageData.file, trialNum, filters);
+                                categoryResults.push(wasmResult);
+                                totalTrials--;
+                                document.getElementById("userImageStatusMsg").textContent = "Running image processing... Files remaining: " + totalFiles + ", Total trials: " + totalTrials;
+                            }
+                            totalFiles--;
+                            document.getElementById("userImageStatusMsg").textContent = "Running image processing... Files remaining: " + totalFiles + ", Total trials: " + totalTrials;
+                        }
+                        currentImageId++;
+                    }
+                    results = results.concat(categoryResults);
+                }
+
+                const csvData = ImageProcessConvertToCSV(results);
+                downloadCSV(csvData, 'image', filters, null, null);
+                document.getElementById("userImageStatusMsg").textContent = "Finished processing images. CSV file downloaded.";
+            });
+
+            // Handle the image processing button click - Example Test
+            document.getElementById("examImageRunButton").addEventListener("click", async function() {
+                const numTrials = parseInt(document.getElementById("examImageTrialsInput").value, 10) || 1;
+                let results = [];
+
+                // Check what radio button is selected for resolution
+                var selectedRes = document.querySelector('input[name="resolution"]:checked').value;
+                console.log("Selected resolution: ", selectedRes);
+
+                const resolutionFolders = {
+                    '720': './imgs/720p/',
+                    '1080': './imgs/1080p/',
+                    '2k': './imgs/2k/',
+                    '4k': './imgs/4k/',
+                    '8k': './imgs/8k/',
+                    'all_res': './imgs/All_Resolutions/'
+                };
+
+                folderPath = resolutionFolders[selectedRes];
+
+                const foldersImageNames = {
+                    '720': ['Image1_720p.jpg', 'Image2_720p.jpg', 'Image3_720p.jpg', 'Image4_720p.jpg', 'Image5_720p.jpg', 'Image6_720p.jpg', 'Image7_720p.jpg', 'Image8_720p.jpg', 'Image9_720p.jpg', 'Image10_720p.jpg'],
+                    '1080': ['Image1_1080p.jpg', 'Image2_1080p.jpg', 'Image3_1080p.jpg', 'Image4_1080p.jpg', 'Image5_1080p.jpg', 'Image6_1080p.jpg', 'Image7_1080p.jpg', 'Image8_1080p.jpg', 'Image9_1080p.jpg', 'Image10_1080p.jpg'],
+                    '2k': ['Image1_2k.jpg', 'Image2_2k.jpg', 'Image3_2k.jpg', 'Image4_2k.jpg', 'Image5_2k.jpg', 'Image6_2k.jpg', 'Image7_2k.jpg', 'Image8_2k.jpg', 'Image9_2k.jpg', 'Image10_2k.jpg'],
+                    '4k': ['Image1_4k.jpg', 'Image2_4k.jpg', 'Image3_4k.jpg', 'Image4_4k.jpg', 'Image5_4k.jpg', 'Image6_4k.jpg', 'Image7_4k.jpg', 'Image8_4k.jpg', 'Image9_4k.jpg', 'Image10_4k.jpg'],
+                    '8k': ['Image1_8k.jpg', 'Image2_8k.jpg', 'Image3_8k.jpg', 'Image4_8k.jpg', 'Image5_8k.jpg', 'Image6_8k.jpg', 'Image7_8k.jpg', 'Image8_8k.jpg', 'Image9_8k.jpg', 'Image10_8k.jpg'],
+                    'all_res' : ['Image1_720p.jpg', 'Image2_720p.jpg', 'Image3_720p.jpg', 'Image4_720p.jpg', 'Image5_720p.jpg', 'Image6_720p.jpg', 'Image7_720p.jpg', 'Image8_720p.jpg', 'Image9_720p.jpg', 'Image10_720p.jpg',
+                                 'Image1_1080p.jpg', 'Image2_1080p.jpg', 'Image3_1080p.jpg', 'Image4_1080p.jpg', 'Image5_1080p.jpg', 'Image6_1080p.jpg', 'Image7_1080p.jpg', 'Image8_1080p.jpg', 'Image9_1080p.jpg', 'Image10_1080p.jpg',
+                                 'Image1_2k.jpg', 'Image2_2k.jpg', 'Image3_2k.jpg', 'Image4_2k.jpg', 'Image5_2k.jpg', 'Image6_2k.jpg', 'Image7_2k.jpg', 'Image8_2k.jpg', 'Image9_2k.jpg', 'Image10_2k.jpg',
+                                 'Image1_4k.jpg', 'Image2_4k.jpg', 'Image3_4k.jpg', 'Image4_4k.jpg', 'Image5_4k.jpg', 'Image6_4k.jpg', 'Image7_4k.jpg', 'Image8_4k.jpg', 'Image9_4k.jpg', 'Image10_4k.jpg',
+                                 'Image1_8k.jpg', 'Image2_8k.jpg', 'Image3_8k.jpg', 'Image4_8k.jpg', 'Image5_8k.jpg', 'Image6_8k.jpg', 'Image7_8k.jpg', 'Image8_8k.jpg', 'Image9_8k.jpg', 'Image10_8k.jpg']
+                };
+
+                fileNames = foldersImageNames[selectedRes];
+
+                // Check what radio button is selected
+                var selectedFilter = document.querySelector('input[name="filter"]:checked').value;
+
+                // Remove 'Exam' from the end of the filter name
+                selectedFilter = selectedFilter.replace('Exam', '');
+                console.log("Selected filter: ", selectedFilter);
+
+                if (selectedFilter === "All Filters") {
+                    var filters = ['applyGaussianBlur', 'applySobelFilter', 'applySepiaTone'];
+                } else {
+                    var filters = [selectedFilter];
+                }
+
+                // Initialize WASM just once
+                await initializeWasm();
+
+                resolutionData = {};
+                var files = [];
+
+                // Process each file
+                for (let i = 0; i < fileNames.length; i++) {
+                    const fileName = fileNames[i];
+                    const fileUrl = folderPath + fileName;
+                    console.log("File URL: ", fileUrl);
+                    const file = await fetchFileAsBlob(fileUrl);
+                    files.push(file);
+                }
+
+                Array.from(files).forEach(function(file) {
+                    var img = new Image();
+                    img.onload = function() {
+                        resolutionData[imageId] = {
+                            width: this.naturalWidth,
+                            height: this.naturalHeight,
+                            resolutionCategory: getResolutionCategory(this.naturalWidth, this.naturalHeight),
+                            sizeKB: Math.round(file.size / 1024),  // Size in KB
+                            file: file
+                        };
+                        console.log("Resolution data for Image ID " + imageId + ": ", resolutionData[imageId]);
+                        imageId++;  // Increment the ID for the next image
+                    };
+                    img.src = URL.createObjectURL(file);
+                });
+
+                // Wait for all images to be loaded and processed
+                await new Promise(resolve => setTimeout(resolve, 1000));
+
+                if (selectedFilter === "All Filters") {
+                    var filters = ['applyGaussianBlur', 'applySobelFilter', 'applySepiaTone'];
+                } else {
+                    var filters = [selectedFilter];
+                }
+
+                let totalFiles = Object.keys(resolutionData).length;
+                let totalTrials = totalFiles * numTrials;
+                document.getElementById("examImageStatusMsg").textContent = "Running image processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                const categories = ['720p', '1080p', '2K', '4K', '8K'];
+                for (let category of categories) {
+                    let categoryResults = [];
+                    let currentImageId = 1;
+
+                    for (let imageData of Object.values(resolutionData)) {
+                        if (imageData.resolutionCategory === category) {
+                            for (let trialNum = 1; trialNum <= numTrials; trialNum++) {
+                                let jsResult = await processImage(currentImageId, 'JS', imageData.file, trialNum, filters, folderPath);
+                                categoryResults.push(jsResult);
+                                let wasmResult = await processImage(currentImageId, 'WASM', imageData.file, trialNum, filters, folderPath);
+                                categoryResults.push(wasmResult);
+                                totalTrials--;
+                                document.getElementById("examImageStatusMsg").textContent = "Running image processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                            }
+                            totalFiles--;
+                            document.getElementById("examImageStatusMsg").textContent = "Running image processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                        }
+                        currentImageId++;
+                    }
+                    results = results.concat(categoryResults);
+                }
+
+                const csvData = ImageProcessConvertToCSV(results);
+                downloadCSV(csvData, 'image', filters, null, selectedRes);
+                document.getElementById("examImageStatusMsg").textContent = "Finished processing images. CSV file downloaded.";
+            });
+
+            // Function to fetch a file as a Blob using AJAX
+            async function fetchFileAsBlob(fileUrl) {
+                const response = await fetch(fileUrl);
+                const blob = await response.blob();
+                return blob;
+            }
+
+            function processImage(imageId, method, file, trialNum, filters, folderPath) {
+                return new Promise(resolve => {
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        const img = new Image();
+                        img.onload = async function() {
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            context.drawImage(img, 0, 0);
+                            let imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+
+                            let timeTaken;
+                            let startTime = performance.now();
+                            if (method === 'JS') {
+                                startTime = performance.now();
+                                filters.forEach(filter => {
+                                    if (filter === 'applyGaussianBlur') {
+                                        imageData = applyGaussianBlur(imageData);
+                                    }
+                                    if (filter === 'applySobelFilter') {
+                                        imageData = applySobelFilter(imageData);
+                                    }
+                                    if (filter === 'applySepiaTone') {
+                                        imageData = applySepiaTone(imageData);
+                                    }
+                                });
+                                timeTaken = performance.now() - startTime;
+                                if (filters.length > 1) {
+                                    filters = ['All Filters'];
+                                } else {
+                                    filters = filters.map(filter => filter.replace('apply', ''));
+                                }
+                                console.log(`Time taken for JS processing (${filters}): `, timeTaken);
+                            } else {
+
+                                startTime = performance.now();
+
+                                // Prepare data for WASM processing
+                                const dataPtr = Module._malloc(imageData.data.length);
+                                Module.HEAPU8.set(imageData.data, dataPtr);
+
+                                filters.forEach(filter => {
+                                    if (filter === 'applyGaussianBlur') {
+                                        Module.ccall('applyGaussianBlur', null, ['number', 'number', 'number'], [dataPtr, imageData.width, imageData.height]);
+                                    }
+                                    if (filter === 'applySobelFilter') {
+                                        Module.ccall('applySobelFilter', null, ['number', 'number', 'number'], [dataPtr, imageData.width, imageData.height]);
+                                    }
+                                    if (filter === 'applySepiaTone') {
+                                        Module.ccall('applySepiaTone', null, ['number', 'number', 'number'], [dataPtr, imageData.width, imageData.height]);
+                                    }
+                                });
+
+                                // Free WASM memory
+                                Module._free(dataPtr);
+
+                                timeTaken = performance.now() - startTime;
+
+                                if (filters.length > 1) {
+                                    filters = ['All Filters'];
+                                } else {
+                                    filters = filters.map(filter => filter.replace('apply', ''));
+                                }
+                                console.log(`Time taken for WASM processing (${filters}): `, timeTaken);
+                            }
+
+                            // Remove the word apply from the start of the filter name if it is not 'All Filters'
+
+                            if (filters.length > 1) {
+                                filters = ['All Filters'];
+                            } else {
+                                filters = filters.map(filter => filter.replace('apply', ''));
+                            }
+
+                            resolve({
+                                imageId: imageId,
+                                resolutionCategory: resolutionData[imageId].resolutionCategory,
+                                sizeKB: resolutionData[imageId].sizeKB,  // Include size in KB
+                                time: timeTaken.toFixed(2),
+                                trialNum: trialNum,
+                                method: method,
+                                filters: filters
+                            });
+                        };
+                        img.src = event.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            function applyJSFilters(imageData, Filters) {
+                if (Filters.includes('applyGaussianBlur')) {
+                    imageData = applyGaussianBlur(imageData);
+                }
+                if (Filters.includes('applySobelFilter')) {
+                    imageData = applySobelFilter(imageData);
+                }
+                if (Filters.includes('applySepiaTone')) {
+                    imageData = applySepiaTone(imageData);
+                }
+                return imageData;
+            }
+
+            function ImageProcessConvertToCSV(objArray) {
+                let str = 'Image ID,Resolution Category,Size (KB),Time Taken (ms),TrialNum,Method,Filters\n';
+                objArray.forEach(item => {
+                    const line = `${item.imageId},${item.resolutionCategory},${item.sizeKB},${item.time},${item.trialNum},${item.method},${item.filters}\n`;
+                    str += line;
+                });
+                return str;
+            }
+
+            function downloadCSV(csvData, method, filters, encryptionMethod, selectedRes) {
+                const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                let fileName = "";
+                if (method === 'image') {
+                    fileName = "image_processing_times";
+                    if (filters.length === 1) {
+                        // remove the word apply from the start of the filter name
+                        filters = filters.map(filter => filter.replace('apply', ''));
+                        fileName += `_${filters[0]}`;
+                        fileName += `_${selectedRes}`;
+                    }
+                } else if (method === 'encrypt') {
+                    fileName = "encryption_processing_times";
+                    fileName += `_${encryptionMethod}`;
+                }
+                fileName += ".csv";
+                link.setAttribute("download", fileName);
+                link.style.visibility = 'hidden';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+
+            // Encryption Section -------------------------------------------------------------------------------
+
+            var encryptUploadClicked = false; // Flag to check if the upload button has been clicked
+
+            // Add event listener for file input
+            document.getElementById("encryptFileInput").addEventListener("change", function() {
+                var imageFileCount = this.files.length;
+            });
+
+            var fileData = {};
+            var fileID = 1;  // Initialize fileID here to keep scope in the whole window
+
+            document.getElementById("encryptUploadButton").addEventListener("click", function() {
+                var files = document.getElementById("encryptFileInput").files;
+                if (files.length === 0) {
+                    alert("Please ensure files are selected.");
+                    return;
+                }
+                document.getElementById("userEncryptStatusMsg").textContent = "Files have been uploaded. Ready to run encryption processing.";
+                encryptUploadClicked = true;
+                fileID = 1;  // Reset doc ID counter every time new files are uploaded
+
+                // Get the file size of the uploaded files
+                Array.from(files).forEach(function(file) {
+                    // Get the file size and store it in the fileData object
+                    fileData[fileID] = {
+                        name: file.name,
+                        sizeKB: Math.round(file.size / 1024),  // Size in KB
+                    };
+                    console.log("File size for Document ID " + fileID + ": ", fileData[fileID]);
+                    fileID++;  // Increment the ID for the next document
+                });
+            });
+
+            document.getElementById("userEncryptRunButton").addEventListener("click", async function() {
+                const files = document.getElementById("encryptFileInput").files;
+                
+                if (!encryptUploadClicked) {
+                    document.getElementById("encryptUploadButton").click();
+                    if (files.length === 0) {
+                        return;
+                    }
+                }
+
+                const numTrials = parseInt(document.getElementById("userEncryptTrialsInput").value, 10) || 1;
+                let results = [];
+                let currentFileID = 1;  // Start fileID from 1 for processing
+
+                document.getElementById("userEncryptStatusMsg").textContent = "Running encryption processing...";
+                
+                // Get the selected encryption method
+                var selectedEncryptMethod = 'all_enc_methods';
+
+                // Initialize WASM just once
+                await initializeWasm();
+
+                let totalFiles = Object.keys(fileData).length;
+                let totalTrials = totalFiles * numTrials;
+                document.getElementById("userEncryptStatusMsg").textContent = "Running encryption processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                for (let file of files) {
+                    for (let trialNum = 1; trialNum <= numTrials; trialNum++) {
+                        let jsResult = await processFileLocal(currentFileID, 'JS', file, trialNum, selectedEncryptMethod);
+                        results.push(jsResult);
+                        let wasmResult = await processFileLocal(currentFileID, 'WASM', file, trialNum, selectedEncryptMethod);
+                        results.push(wasmResult);
+                        totalTrials--;
+                        document.getElementById("userEncryptStatusMsg").textContent = "Running encryption processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                    }
+                    totalFiles--;
+                    document.getElementById("userEncryptStatusMsg").textContent = "Running encryption processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                    currentFileID++;  // Increment after processing each file for all trials
+                }
+
+                const csvData = EncryptProcessConvertToCSV(results);
+                downloadCSV(csvData, 'encrypt', null, selectedEncryptMethod);
+                document.getElementById("userEncryptStatusMsg").textContent = "Finished processing files. CSV file downloaded.";
+            });
+
+            document.getElementById("examEncryptRunButton").addEventListener("click", async function() {
+
+                // Check that a radio button is selected before continuing
+                if (document.querySelector('input[name="encryptMethod"]:checked') == null) {
+                    alert("Please select an encryption method.");
+                    return;
+                }
+
+                // Check what radio button is selected
+                var selectedEncryptMethod = document.querySelector('input[name="encryptMethod"]:checked').value;
+                console.log("Selected encryption method: ", selectedEncryptMethod);
+
+                folderPath = './datasets/';
+
+                const fileNames = ["dataset_1.csv", "dataset_2.csv", "dataset_3.csv", "dataset_4.csv", "dataset_5.csv", "dataset_6.csv", "dataset_7.csv", "dataset_8.csv", "dataset_9.csv", "dataset_10.csv"]
+
+
+                const csvFiles = [];
+                csvFileID = 1;  // Initialize fileID here to keep scope in the whole window
+
+                // Use the ajax to get the files and store them in the files array
+                for (let i = 0; i < fileNames.length; i++) {
+                    const fileName = fileNames[i];
+                    const fileUrl = folderPath + fileName;
+                    console.log("File URL "+ (i+1) + ": ", fileUrl);
+                    const blob = await fetchFileAsBlob(fileUrl);
+                    const file = new File([blob], fileName);  // Create a new File object
+                    csvFiles.push(file);
+                }
+
+                Array.from(csvFiles).forEach(function(file) {
+                    // Get the file size and store it in the fileData object
+                    fileData[csvFileID] = {
+                        name: file.name,
+                        sizeKB: Math.round(file.size / 1024),  // Size in KB
+                    };
+                    console.log("File size for Document ID " + csvFileID + ": ", fileData[csvFileID]);
+                    csvFileID++;  // Increment the ID for the next document
+                });
+
+                const numTrials = parseInt(document.getElementById("examEncryptTrialsInput").value, 10) || 1;
+                let results = [];
+                let currentFileID = 1;  // Start fileID from 1 for processing
+
+                document.getElementById("examEncryptStatusMsg").textContent = "Running encryption processing...";
+
+                // Initialize WASM just once
+                await initializeWasm();
+
+                let totalFiles = Object.keys(fileData).length;
+                let totalTrials = totalFiles * numTrials;
+                console.log("Total Trials: ", totalTrials);
+                document.getElementById("examEncryptStatusMsg").textContent = "Running encryption processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                
+                for (let file of csvFiles) {
+                    for (let trialNum = 1; trialNum <= numTrials; trialNum++) {
+                        let jsResult = await processFileLocal(currentFileID, 'JS', file, trialNum, selectedEncryptMethod);
+                        results.push(jsResult);
+                        let wasmResult = await processFileLocal(currentFileID, 'WASM', file, trialNum, selectedEncryptMethod);
+                        results.push(wasmResult);
+                        totalTrials--;
+                        document.getElementById("examEncryptStatusMsg").textContent = "Running encryption processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                    }
+                    totalFiles--;
+                    document.getElementById("examEncryptStatusMsg").textContent = "Running encryption processing... Total files: " + totalFiles + ", Total trials: " + totalTrials;
+                    currentFileID++;  // Increment after processing each file for all trials
+                }
+
+                const csvData = EncryptProcessConvertToCSV(results);
+                downloadCSV(csvData, 'encrypt', null, selectedEncryptMethod);
+                document.getElementById("examEncryptStatusMsg").textContent = "Finished processing files. CSV file downloaded.";
+            })
+
+            function processFileLocal(fileID, method, file, trialNum, encryptMethod) {
+                return new Promise(resolve => {
+                    const reader = new FileReader();
+                    reader.onload = function(event) {
+                        const fileData = event.target.result;
+                        const startTime = performance.now();
+                        let timeTaken;
+                        if (method === 'JS') {
+                            if (encryptMethod == 'caesar'){
+                                const startTime = performance.now();
+                                const caeserEncryptedData = caesarCipher(fileData, 3);
+                            } else if (encryptMethod == 'vigenere'){
+                                const startTime = performance.now();
+                                const vigenereEncryptedData = vigenereEncrypt(fileData, 'TESTKEY');
+                            } else {
+                                // Run both encryption methods
+                                const startTime = performance.now();
+                                const caeserEncryptedData = caesarCipher(fileData, 3);
+                                const vigenereEncryptedData = vigenereEncrypt(fileData, 'TESTKEY');
+                            }
+                            timeTaken = performance.now() - startTime;
+                            
+                            console.log(`Time taken for JS processing (${encryptMethod}): `, timeTaken);
+                        } else {
+                            if (encryptMethod == 'caesar'){
+                                const startTime = performance.now();
+                                const dataPtr = Module._malloc(fileData.length);
+                                Module.HEAPU8.set(fileData, dataPtr);
+                                const encryptedDataPtr = Module.ccall('caesarCipher', 'number', ['number', 'number'], [dataPtr, 3]);
+                                Module._free(dataPtr);
+                            } else if (encryptMethod == 'vigenere'){
+                                const startTime = performance.now();
+                                const dataPtr = Module._malloc(fileData.length);
+                                Module.HEAPU8.set(fileData, dataPtr);
+                                const vigenereEncryptedData = Module.ccall('vigenereCipher', 'string', ['string', 'string'], [dataPtr, 'TESTKEY']);
+                                Module._free(dataPtr);
+                            } else {
+                                // Run both encryption methods
+                                const startTime = performance.now();
+                                const dataPtr = Module._malloc(fileData.length);
+                                Module.HEAPU8.set(fileData, dataPtr);
+                                const encryptedDataPtr = Module.ccall('caesarCipher', 'number', ['number', 'number'], [dataPtr, 3]);
+                                const vigenereEncryptedData = Module.ccall('vigenereCipher', 'string', ['string', 'string'], [dataPtr, 'TESTKEY']);
+                                Module._free(dataPtr);
+                            }
+
+                            timeTaken = performance.now() - startTime;
+                            console.log(`Time taken for WASM processing (${encryptMethod}): `, timeTaken);
+                        }
+
+                        resolve({
+                            fileID: fileID,
+                            name: file.name,
+                            size: file.size,
+                            time: timeTaken.toFixed(2),
+                            trialNum: trialNum,
+                            method: method,
+                            encryptMethod: encryptMethod
+                        });
+                    };
+                    reader.readAsText(file); // Directly read the file object
+                });
+            }
+
+            function stringToUTF8(str, outPtr, maxBytesToWrite) {
+                return Module['stringToUTF8'](str, outPtr, maxBytesToWrite);
+            }
+
+            function EncryptProcessConvertToCSV(objArray) {
+                let str = 'FileID,FileName,TimeTaken (ms),TrialNum,Method,EncryptionMethod\n';
+                objArray.forEach(item => {
+                    const line = `${item.fileID},${item.name},${item.time},${item.trialNum},${item.method},${item.encryptMethod}\n`;
+                    str += line;
+                });
+                return str;
+            }
+
+        }
+    </script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>100536235 - Dissertation Project</h1>
+        </header>
+
+        <div class="contentContainer">
+            <div class="imageProcessingContainer">
+                <!-- START: Image Processing: User Tool-------------------------------------------------------------------------------------------------->
+                <div class="dottedBox"> <!-- Image Processing: User Tool -->
+                    <h2>Image Processing: User Tool</h2>
+                    <p style="text-align: left;"> Use this section to upload your own images for testing.</p>
+                    <div class="fileUploadContainer">
+                        <input type="file" id="imageFileInput" accept=".png, .jpg, .jpeg" multiple>
+                        <button id="imageUploadButton">Upload Images</button>
+                    </div>
+                    <form>
+                        <p style="margin-bottom: 10px; text-align: left;">Choose the filter(s) to test:</p>
+                        <input type="radio" id="Gaussian Blur" name="filter" value="applyGaussianBlurUser">
+                        <label for="Gaussian Blur">Gaussian Blur</label>
+                        <input type="radio" id="Sobel Filter" name="filter" value="applySobelFilterUser">
+                        <label for="Sobel Filter">Sobel Filter</label>
+                        <input type="radio" id="Sepia Tone" name="filter" value="applySepiaToneUser">
+                        <label for="Sepia Tone">Sepia Tone</label>
+                        <input type="radio" id="All Filters" name="filter" value="All FiltersUser">
+                        <label for="All Filters">All Filters</label>
+                      </form>
+                    <p style="margin-bottom: 10px; text-align: left;">Enter the number of trials you would like to run:</p>
+                    <input class="buttonInput" id="userImageTrialsInput" type="number" min="1" max="1000" placeholder="Enter number of trials">
+                    <button class="buttonInput" id="userImageRunButton">Run</button>
+                    <!-- Status Message Display -->
+                    <p class="statusMessages" id="userImageStatusMsg">Ready for upload</p>
+                </div>
+                <!-- END: Image Processing: User Tool-------------------------------------------------------------------------------------------------->
+                
+                <!-- START: Image Processing: User Tool------------------------------------------------------------------------------------------------>
+                <div class="dottedBox"> <!-- Image Processing: Example Test -->
+                    <h2>Image Processing: Run Example Test</h2>
+                    <form>
+                        <p style="margin-bottom: 10px; text-align: left;">Choose the resolution category to run the test:</p>
+                        <input type="radio" id="720p" name="resolution" value="720">
+                        <label for="720p">720p</label>
+                        <input type="radio" id="1080p" name="resolution" value="1080">
+                        <label for="1080p">1080p</label>
+                        <input type="radio" id="2k" name="resolution" value="2k">
+                        <label for="2k">2K</label>
+                        <input type="radio" id="4k" name="resolution" value="4k">
+                        <label for="4k">4K</label>
+                        <input type="radio" id="8k" name="resolution" value="8k">
+                        <label for="8k">8K</label>
+                        <input type="radio" id="all_res" name="resolution" value="all_res">
+                        <label for="all_res">All Resolutions</label>
+                    </form>
+                    <form>
+                        <p style="margin-bottom: 10px; text-align: left;">Choose the filter(s) to test:</p>
+                        <input type="radio" id="Gaussian Blur Exam" name="filter" value="applyGaussianBlurExam">
+                        <label for="Gaussian Blur Exam">Gaussian Blur</label>
+                        <input type="radio" id="Sobel Filter Exam" name="filter" value="applySobelFilterExam">
+                        <label for="Sobel Filter Exam">Sobel Filter</label>
+                        <input type="radio" id="Sepia Tone Exam" name="filter" value="applySepiaToneExam">
+                        <label for="Sepia Tone Exam">Sepia Tone</label>
+                        <input type="radio" id="All Filters Exam" name="filter" value="All FiltersExam">
+                        <label for="All Filters Exam">All Filters</label>
+                    </form>
+                    <p style="margin-bottom: 10px; text-align: left;">Enter the number of trials you would like to run:</p>
+                    <input class="buttonInput" id="examImageTrialsInput" type="number" min="1" max="1000" placeholder="Enter number of trials"> 
+                    <button class="buttonInput" id="examImageRunButton">Run</button>
+                    <!-- Status Message Display -->
+                    <p class="statusMessages" id="examImageStatusMsg">Ready for upload</p>
+                </div>
+                <!-- END: Image Processing: User Tool ------------------------------------------------------------------------------------------------->
+            </div>
+        
+            <div class="encryptProcessingContainer">
+                <!-- START: Encryption: User Tool------------------------------------------------------------------------------------------------------>
+                <div class="dottedBox"> <!-- Encryption: User Tool -->
+                    <h2>Encryption Processing: User Tool</h2>
+                    <div class="fileUploadContainer">
+                        <input type="file" id="encryptFileInput" accept=".csv" multiple>
+                        <button id="encryptUploadButton">Upload CSV files</button>
+                    </div><br>
+                    <div class="fileUploadContainer">
+                        <input type="file" id="encryptFileInput" accept=".py, .js, .html" multiple>
+                        <button id="encryptUploadButton">Upload script files</button>
+                    </div>
+                    <p style="margin-bottom: 10px; text-align: center; font-size: 0.8em">* If no scripts have been uploaded, the program will run both Caesar and Vigenère encryptions.</p>
+                    <p style="text-align: left;" id="imageimageFileCount"></p>
+                    <p style="margin-bottom: 10px; text-align: left;">Enter the number of trials you would like to run:</p>
+                    <input class="buttonInput" id="userEncryptTrialsInput" type="number" min="1" max="1000" placeholder="Enter number of trials">
+                    <button class="buttonInput" id="userEncryptRunButton">Run</button>
+                    <!-- Status Message Display -->
+                    <p class="statusMessages" id="userEncryptStatusMsg">Ready for upload</p>
+                </div>
+                <!-- END: Encryption: User Tool ------------------------------------------------------------------------------------------------------>
+
+                <!-- START: Encryption: Example ------------------------------------------------------------------------------------------------------>
+                <div class="dottedBox"> 
+                    <h2>Encryption Processing: Run Example Test</h2>
+                    <form>
+                        <p style="text-align: left;">Choose the encryption method to run the test:</p>
+                        <input type="radio" id="caesar" name="encryptMethod" value="caesar">
+                        <label for="caesar">Caesar Cipher</label>
+                        <input type="radio" id="Vigenère Cipher" name="encryptMethod" value="vigenere">
+                        <label for="Vigenère Cipher">Vigenère Cipher</label>
+                        <input type="radio" id="all_enc_methods" name="encryptMethod" value="all_enc_methods">
+                        <label for="all_enc_methods">All Methods</label>
+                      </form>
+                    <p style="text-align: left;" id="imageimageFileCount"></p>
+                    <p style="text-align: left;">Enter the number of trials you would like to run:</p>
+                    <input class="buttonInput" id="examEncryptTrialsInput" type="number" min="1" max="1000" placeholder="Enter number of trials">
+                    <button class="buttonInput" id="examEncryptRunButton">Run</button>
+                    <!-- Status Message Display -->
+                    <p class="statusMessages" id="examEncryptStatusMsg">Ready for upload</p>
+                </div>
+                <!-- END: Encryption: Example ------------------------------------------------------------------------------------------------------->
+            </div>
+        </div>
+
+        <footer>
+            <p>Author: Aaron Smith | StudentID: 100536235</p>
+        </footer>
+    </div>
+</body>
+</html>
