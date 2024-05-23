@@ -1,0 +1,1 @@
+emcc -O3 -s WASM=1 -s EXPORTED_RUNTIME_METHODS=["ccall","cwrap"] -s EXTRA_EXPORTED_RUNTIME_METHODS=["UTF8ToString","stringToUTF8","lengthBytesUTF8"] -s EXPORTED_FUNCTIONS="['_malloc', '_free', '_applyGaussianBlur', '_applySobelFilter', '_applySepiaTone', '_caesarCipher', '_vigenereCipher']" -s ALLOW_MEMORY_GROWTH=1 -o WASM_COMB.js WASM_COMB.cpp
